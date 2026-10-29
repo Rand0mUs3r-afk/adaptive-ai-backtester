@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+import pandas as pd
 import streamlit as st
 from collector import collect
 
