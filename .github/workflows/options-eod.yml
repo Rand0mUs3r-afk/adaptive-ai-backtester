@@ -14,11 +14,6 @@ on:
         description: Shared-equity premium allocation fraction
         type: string
         default: '0.25'
-      stock_feed:
-        description: Alpaca stock feed
-        type: choice
-        options: [iex, sip]
-        default: iex
 permissions:
   contents: read
 jobs:
@@ -32,15 +27,14 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
       - run: python -m unittest -v
-      - name: Read watchlist and evaluate all implemented setups
+      - name: Automatically select feed and backtest watchlist
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           START: ${{ inputs.start }}
           END: ${{ inputs.end }}
           ALLOCATION: ${{ inputs.allocation }}
-          STOCK_FEED: ${{ inputs.stock_feed }}
-        run: python watchlist_backtest.py --start "$START" --end "$END" --allocation "$ALLOCATION" --stock-feed "$STOCK_FEED"
+        run: python auto_watchlist.py --start "$START" --end "$END" --allocation "$ALLOCATION"
       - name: Publish outcomes
         if: always()
         run: |

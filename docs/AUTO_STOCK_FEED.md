@@ -1,0 +1,11 @@
+# Automatic Alpaca stock-feed selection
+
+Both manual options workflows now call auto_watchlist.py. There is no feed dropdown; only dates and allocation remain. Tickers still come exclusively from watchlist.txt. The existing eight-ticker watchlist is unchanged by this commit.
+
+The wrapper tries SIP first across the complete watchlist and requested historical range, including 150 calendar days for indicator warmup. It validates bars with the existing feature pipeline, requires at least 50 pre-test bars and some test data, and checks matching test-session date sets across roots. These are basic coverage checks, not independent exchange-calendar verification. If SIP is denied (e.g. 403) or fails these checks, it tries IEX for the whole list. HTTP 401 stops immediately because a bad credential is not a feed entitlement problem. Missing credentials also stop. No subscription or permissions are changed.
+
+The first feed that passes is fixed before strategy evaluation. SIP success does not require an additional IEX request. The code never runs both and chooses whichever has better returns, never mixes feeds across tickers, and never silently switches feed after the backtest begins. A later stock-data or option-quote failure remains a failed run. Both feeds failing yields an explicit error rather than fabricated prices or final equity.
+
+The selected feed, attempts and failure reasons appear in stock_feed_selection.json and the report; successful summary.json includes the same metadata. The underlying watchlist runner is invoked with that explicit feed, preserving the shared $2,000 portfolio and trade accounting. History is fetched again by that runner after preflight, so preflight is not a guarantee against a later provider outage. IEX versus SIP data can produce different volume-based signals; the source remains disclosed. Option prices still use OnclickMedia EOD raw bid/ask and are unaffected by stock-feed selection.
+
+Five isolated tests cover SIP success, SIP denial/IEX fallback, empty SIP history, both unavailable and 401 failure. Tests use mocked data, not real account access. Authenticated end-to-end behavior still requires a workflow run with valid Alpaca Actions secrets. This commit does not run the workflow, alter secrets, or place orders. This document supersedes earlier instructions asking you to select a feed manually.
