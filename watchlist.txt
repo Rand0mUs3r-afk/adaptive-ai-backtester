@@ -4,5 +4,12 @@
 MODE=manual
 TOP=5
 SPY
+QQQ
+AMZN
+AAPL
+TSLA
+CNQ
+NVDA
+AMD
 # Add underlying tickers, or full standard CALL contract symbols.
 # A full call pins selection to that contract; normal eligibility still applies.
