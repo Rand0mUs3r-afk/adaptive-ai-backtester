@@ -1,0 +1,78 @@
+name: Options backtest ($2,000)
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: Single US underlying ticker
+        required: true
+        default: SPY
+        type: string
+      start:
+        description: Start YYYY-MM-DD (since February 2024)
+        required: true
+        type: string
+      end:
+        description: End YYYY-MM-DD (completed sessions, max 180 days)
+        required: true
+        type: string
+      strategy:
+        description: Fixed signal policy (not trained AI)
+        type: choice
+        options: [adaptive, breakout, momentum, reversion, blend]
+        default: adaptive
+      allocation:
+        description: Maximum premium allocation fraction, not stop-based risk
+        type: string
+        default: '0.25'
+      slippage:
+        description: Adverse fill adjustment each side, fraction
+        type: string
+        default: '0.02'
+      stock_feed:
+        description: Stock signal feed (SIP needs entitlement)
+        type: choice
+        options: [iex, sip]
+        default: iex
+permissions:
+  contents: read
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Unit tests
+        run: python -m unittest -v
+      - name: Fetch Alpaca data and simulate $2,000 account
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          SYMBOL: ${{ inputs.symbol }}
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          STRATEGY: ${{ inputs.strategy }}
+          ALLOCATION: ${{ inputs.allocation }}
+          SLIPPAGE: ${{ inputs.slippage }}
+          STOCK_FEED: ${{ inputs.stock_feed }}
+        run: |
+          python alpaca_backtest.py --symbol "$SYMBOL" --start "$START" --end "$END" --strategy "$STRATEGY" --allocation "$ALLOCATION" --slippage "$SLIPPAGE" --stock-feed "$STOCK_FEED"
+      - name: Publish every trade and final outcome in run summary
+        if: always()
+        run: |
+          if [ -f results/report.md ]; then
+            cat results/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Backtest did not complete. No valid performance report is available; check failed steps.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Downloadable research results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: options-backtest-${{ github.run_id }}
+          path: results/
+          if-no-files-found: warn
+          retention-days: 7
