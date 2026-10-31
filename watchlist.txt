@@ -1,0 +1,8 @@
+# All manual workflow runs read this file. One entry per line.
+# MODE=manual tests every listed underlying; MODE=active ranks this pool.
+# TOP applies only to MODE=active. Maximum 10 underlying roots.
+MODE=manual
+TOP=5
+SPY
+# Add underlying tickers, or full standard CALL contract symbols.
+# A full call pins selection to that contract; normal eligibility still applies.
