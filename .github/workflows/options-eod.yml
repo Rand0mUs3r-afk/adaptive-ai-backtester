@@ -1,0 +1,82 @@
+name: Options backtest - EOD quotes ($2,000)
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: Single US underlying ticker
+        required: true
+        default: SPY
+        type: string
+      start:
+        description: Start date YYYY-MM-DD
+        required: true
+        type: string
+      end:
+        description: Completed end date (max 180 calendar days)
+        required: true
+        type: string
+      strategy:
+        description: Fixed stock-signal policy
+        type: choice
+        options: [adaptive, breakout, momentum, reversion, blend]
+        default: adaptive
+      allocation:
+        description: Maximum premium fraction of equity
+        type: string
+        default: '0.25'
+      pricing:
+        description: Auto EOD routes missing Alpaca historical quotes to OnclickMedia
+        type: choice
+        options: [auto-eod, alpaca-bars]
+        default: auto-eod
+      stock_feed:
+        description: Alpaca stock feed (SIP needs entitlement)
+        type: choice
+        options: [iex, sip]
+        default: iex
+permissions:
+  contents: read
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest -v
+      - name: Fetch data and backtest
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          SYMBOL: ${{ inputs.symbol }}
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          STRATEGY: ${{ inputs.strategy }}
+          ALLOCATION: ${{ inputs.allocation }}
+          PRICING: ${{ inputs.pricing }}
+          STOCK_FEED: ${{ inputs.stock_feed }}
+        run: |
+          case "$PRICING" in
+            auto-eod) SCRIPT=onclick_backtest.py ;;
+            alpaca-bars) SCRIPT=alpaca_backtest.py ;;
+            *) echo 'Unsupported pricing mode'; exit 2 ;;
+          esac
+          python "$SCRIPT" --symbol "$SYMBOL" --start "$START" --end "$END" --strategy "$STRATEGY" --allocation "$ALLOCATION" --stock-feed "$STOCK_FEED"
+      - name: Run summary
+        if: always()
+        run: |
+          if [ -f results/report.md ]; then
+            cat results/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Run failed before a valid report; inspect failed steps.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: options-eod-${{ github.run_id }}
+          path: results/
+          if-no-files-found: warn
+          retention-days: 7
