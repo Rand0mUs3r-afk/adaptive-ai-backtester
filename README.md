@@ -43,3 +43,25 @@ The dashboard split is 65% development and 35% evaluation by unique dates, with 
 Allocation is a fraction of equity spent at entry, NOT maximum portfolio loss or stop-based risk sizing. Simultaneous signals are processed alphabetically; no optimal allocation is claimed. Router changes affect new entries; open positions keep the same exit policy. The breakout is rolling resistance, NOT the exact custom Darvas algorithm discussed in the project.
 
 See `docs/BLUEPRINT.md` for architecture, safeguards and the remaining build plan. No licensed market data or secrets should be committed.
+
+FROM PERPLEXITY OCT 30
+
+## Dated repository and automation review
+
+The existing documentation describes an implemented research MVP, not an empty repository: a Streamlit interface, historical simulation engine, CSV data inputs, strategy blends and rule-based routing. The AI/adaptive name does not imply a trained forecasting model or a calibrated probability of winning. This documentation review did not execute the application, tests or market-data experiments.
+
+## Workflow configuration inspected
+
+- Workflow: .github/workflows/tests.yml (tests).
+- Configured triggers: push and pull_request.
+- The inspected workflow has no cron schedule and no workflow_dispatch trigger. It installs requirements and runs python -m unittest -v using Python 3.11.
+- These are automatic code-change tests, not recurring stock scans, strategy searches or trading runs. Committing this README may trigger the existing push-based tests if Actions permits them.
+- CURRENT ACTIONS ENABLED/DISABLED STATUS: NOT VERIFIED. The connected review tools exposed workflow source, not current activation state, repository Actions permissions or successful-run status. Absence of a cron is not proof that Actions is disabled.
+
+## Related projects and manual stop
+
+This overlaps in research purpose with the other adaptive/options lab projects, but similarly named repositories are not automatically implementations of this app and do not share its uploaded datasets or results. Real historical option quotes and the data contract above remain necessary.
+
+There is no recurring application schedule to stop in the inspected workflow. To stop future push/PR test runs, open Actions > tests > workflow menu > Disable workflow; cancel queued/running jobs separately. Disabling GitHub CI does not stop a Streamlit application hosted separately or running on a computer.
+
+This append preserves all original text and changes documentation only. It does not change application code, datasets, workflow triggers, broker connections or settings. It is a dated review, not a continuously updated operational-status dashboard.
