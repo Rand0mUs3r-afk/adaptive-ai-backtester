@@ -5,6 +5,15 @@ import pandas as pd
 import limited_backtest as limited
 
 
+def skip_records(frame):
+    """Missing optional identifiers become null; invalid numeric data stays strict."""
+    records = frame.to_dict("records")
+    for row in records:
+        if "contract" in row and pd.isna(row["contract"]):
+            row["contract"] = None
+    return records
+
+
 def selection_counts(rows, day, close, budget):
     dated = [q for q in rows if 30 <= (pd.Timestamp(q["expiry"]) - pd.Timestamp(day)).days <= 60]
     nearby = [q for q in dated if abs(q["strike"] / close - 1) <= .1]
@@ -34,7 +43,7 @@ def main():
         try:
             trades, equity, skips, metrics = original(stocks, quotes, ticker, start, end,
                 strategy, allocation, stock_feed, run_preflight=run_preflight)
-            for row in skips.to_dict("records"):
+            for row in skip_records(skips):
                 date = pd.Timestamp(row["date"])
                 prior = raw[raw.date < date].iloc[-1]
                 day = prior.date.date().isoformat()
