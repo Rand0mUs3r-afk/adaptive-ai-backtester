@@ -1,0 +1,50 @@
+name: Limited-data options research
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: Historical start YYYY-MM-DD; provider access must cover prior session too
+        required: true
+        type: string
+      end:
+        description: Completed end YYYY-MM-DD, max 180 calendar days
+        required: true
+        type: string
+      allocation:
+        description: Premium allocation per independent 2000 USD account
+        default: '0.25'
+        type: string
+permissions:
+  contents: read
+jobs:
+  limited-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest -v
+      - name: Run limited-strike research, no orders
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          ALLOCATION: ${{ inputs.allocation }}
+        run: python limited_backtest.py --start "$START" --end "$END" --allocation "$ALLOCATION"
+      - name: Publish limited-research report
+        if: always()
+        run: |
+          if [ -f results/report.md ]; then
+            cat results/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: limited-options-${{ github.run_id }}
+          path: results/
+          retention-days: 7
+          if-no-files-found: warn
