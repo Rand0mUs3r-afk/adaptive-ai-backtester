@@ -1,0 +1,36 @@
+name: Paper session - 15 minute options scan
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '2,17,32,47 13-20 * * 1-5'
+permissions:
+  contents: read
+concurrency:
+  group: romie-paper-session
+  cancel-in-progress: false
+jobs:
+  paper-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest -v
+      - name: Observe or trade only the verified paper account
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY || secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY || secrets.ALPACA_SECRET_KEY }}
+          PAPER_ORDERS_ENABLED: ${{ vars.PAPER_ORDERS_ENABLED || 'false' }}
+          PAPER_ACCOUNT_ID: ${{ vars.PAPER_ACCOUNT_ID }}
+          PAPER_ARM_DATE: ${{ vars.PAPER_ARM_DATE }}
+        run: python paper_session.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: paper-cycle-${{ github.run_id }}
+          path: paper_results/
+          retention-days: 7
+          if-no-files-found: warn
