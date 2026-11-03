@@ -34,7 +34,7 @@ jobs:
           START: ${{ inputs.start }}
           END: ${{ inputs.end }}
           ALLOCATION: ${{ inputs.allocation }}
-        run: python limited_backtest.py --start "$START" --end "$END" --allocation "$ALLOCATION"
+        run: python limited_diagnostics.py --start "$START" --end "$END" --allocation "$ALLOCATION"
       - name: Publish limited-research report
         if: always()
         run: |
