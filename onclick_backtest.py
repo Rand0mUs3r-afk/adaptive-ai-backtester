@@ -8,7 +8,8 @@ from pathlib import Path
 import re
 import time
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 import pandas as pd
 import alpaca_backtest as legacy
 from engine import features, signal
@@ -46,33 +47,108 @@ def normalize(payload, ticker, day):
 
 
 class Onclick:
+    """Raw-quote access only; diagnostics never include response bodies or secrets."""
+    ENDPOINT = "https://api.onclickmedia.com/"
+
     def __init__(self):
-        self.cache, self.audit = {}, []
+        self.cache, self.audit, self.requests = {}, [], []
+        self.preflight_audit = dict(status="not_run", checks=[],
+            scope="Sampled historical chains only; not complete contract/date coverage")
+
+    @staticmethod
+    def _content_type(headers):
+        value = (headers.get("Content-Type", "") if headers else "").split(";", 1)[0].strip().lower()
+        return value if re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", value) else "unknown"
+
+    def _failure(self, ticker, day, category, status, attempt):
+        hints = {
+            401: "Provider requires authentication; verify its documented access method.",
+            403: "Provider denied access; verify permission and supported API access.",
+            404: "Configured API route was not found; verify the provider's current documentation.",
+            429: "Provider rate limit reached; retry later within its documented limits.",
+        }
+        hint = hints.get(status, "Check provider availability and the documented API response format.")
+        return ValueError(f"OnclickMedia {category}: ticker={ticker}, date={day}, "
+            f"HTTP={status if status is not None else 'unavailable'}, attempts={attempt}. "
+            f"{hint} See options_request_diagnostics.json. No trade-bar or midpoint fallback permitted.")
+
     def chain(self, ticker, day):
+        ticker, day = str(ticker).upper(), str(day)
+        if not re.fullmatch(r"[A-Z]{1,5}", ticker) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            raise ValueError("Invalid options ticker/date")
+        pd.Timestamp(day)
         key = (ticker, day)
         if key in self.cache:
             return self.cache[key]
-        url = "https://api.onclickmedia.com/?" + urlencode(dict(ticker=ticker, date=day, type="call", data="greeks", output="json-v1"))
-        for attempt in range(3):
-            time.sleep(1.1 * (attempt+1))
+        url = self.ENDPOINT + "?" + urlencode(dict(ticker=ticker, date=day, type="call", data="greeks", output="json-v1"))
+        request = Request(url, headers={"Accept": "application/json", "User-Agent": "adaptive-ai-backtester/1.0"})
+        for attempt in range(1, 4):
+            time.sleep(1.1 * 2 ** (attempt - 1))
+            record = dict(ticker=ticker, date=day, endpoint=self.ENDPOINT,
+                attempt=attempt, http_status=None, content_type="unknown")
+            retryable = False
             try:
-                with urlopen(url, timeout=60) as response:
+                with urlopen(request, timeout=60) as response:
+                    record["http_status"] = response.status
+                    record["content_type"] = self._content_type(response.headers)
                     payload = json.load(response)
-                break
-            except Exception:
-                if attempt == 2:
-                    raise ValueError("OnclickMedia request failed; no trade-bar or midpoint fallback permitted") from None
-        rows, rejected = normalize(payload, ticker, day)
-        self.cache[key] = rows
-        self.audit.append(dict(ticker=ticker, date=day, valid_calls=len(rows), rejected_records=rejected, sha256=hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()))
-        return rows
+                if record["content_type"] not in ("application/json", "text/json", "unknown") and not record["content_type"].endswith("+json"):
+                    record["category"] = "unexpected_content_type"
+                else:
+                    try:
+                        rows, rejected = normalize(payload, ticker, day)
+                    except (ValueError, TypeError, AttributeError, KeyError):
+                        record["category"] = "invalid_snapshot"
+                    else:
+                        self.cache[key] = rows
+                        self.audit.append(dict(ticker=ticker, date=day, valid_calls=len(rows),
+                            rejected_records=rejected, sha256=hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()))
+                        record.update(category="success", valid_calls=len(rows), rejected_records=rejected)
+                        self.requests.append(record)
+                        return rows
+            except HTTPError as exc:
+                record.update(category="http_error", http_status=exc.code,
+                    content_type=self._content_type(exc.headers))
+                retryable = exc.code in (408, 429, 500, 502, 503, 504)
+                exc.close()
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                record["category"] = "invalid_json"
+            except (TimeoutError, URLError, OSError) as exc:
+                record["category"] = "timeout" if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError) else "network_error"
+                retryable = True
+            self.requests.append(record)
+            if not retryable or attempt == 3:
+                raise self._failure(ticker, day, record["category"], record["http_status"], attempt) from None
+
+    def preflight(self, dates_by_ticker):
+        """Probe prior/entry/final snapshots, without using quotes to rank trades."""
+        checks = [dict(ticker=ticker, date=day, status="not_checked")
+            for ticker, days in dates_by_ticker.items() for day in sorted(set(days))]
+        self.preflight_audit.update(status="running", checks=checks)
+        for check in checks:
+            try:
+                rows = self.chain(check["ticker"], check["date"])
+            except ValueError:
+                check["status"] = "failed"
+                self.preflight_audit["status"] = "failed"
+                raise
+            check.update(status="passed", valid_calls=len(rows))
+        self.preflight_audit["status"] = "passed"
+
+    def save_diagnostics(self, out):
+        out = Path(out)
+        out.mkdir(parents=True, exist_ok=True)
+        for name, payload in (("quote_provenance.json", self.audit),
+                ("options_request_diagnostics.json", self.requests),
+                ("options_preflight.json", self.preflight_audit)):
+            (out/name).write_text(json.dumps(payload, indent=2, allow_nan=False))
 
 
 def quantity(ask, equity, allocation=.25, fee=.65):
     return int(equity*allocation//(ask*100+fee))
 
 
-def simulate(stocks, quotes, ticker, start, end, strategy="adaptive", allocation=.25, stock_feed="iex"):
+def simulate(stocks, quotes, ticker, start, end, strategy="adaptive", allocation=.25, stock_feed="iex", run_preflight=False):
     start, end = pd.Timestamp(start), pd.Timestamp(end)
     if not re.fullmatch(r"[A-Z]{1,5}", ticker) or strategy not in ("adaptive","breakout","momentum","reversion","blend") or not 0<allocation<=1:
         raise ValueError("Invalid ticker, policy or allocation")
@@ -81,6 +157,12 @@ def simulate(stocks, quotes, ticker, start, end, strategy="adaptive", allocation
     raw = stocks.bars([ticker],start-pd.Timedelta(days=150),end,stock=True,stock_feed=stock_feed)
     f = features(raw).sort_values("date").reset_index(drop=True)
     f["date"] = pd.to_datetime(f.date).dt.normalize()
+    if run_preflight:
+        indices = f.index[(f.date >= start) & (f.date <= end)].tolist()
+        if not indices or indices[0] == 0 or pd.isna(f.iloc[indices[0]-1].slow):
+            raise ValueError("Insufficient stock warmup/test coverage")
+        quotes.preflight({ticker: [f.iloc[i].date.date().isoformat()
+            for i in (indices[0]-1, indices[0], indices[-1])]})
     cash, p, trades, curve, skipped = 2000.0, None, [], [], []
     fee = .65
     for i,row in f.iterrows():
@@ -159,7 +241,7 @@ def main():
     quotes=Onclick()
     config={**vars(args),"starting_equity":2000,"execution":"next-session EOD ask/bid","options_provider":"onclickmedia","stock_provider":"alpaca","routing_reason":"Alpaca adapter has no historical bid/ask capability; route EOD quote runs to OnclickMedia","git_sha":os.getenv("GITHUB_SHA","local")}
     try:
-        t,e,s,m=simulate(legacy.Alpaca(),quotes,args.symbol,args.start,args.end,args.strategy,args.allocation,args.stock_feed)
+        t,e,s,m=simulate(legacy.Alpaca(),quotes,args.symbol,args.start,args.end,args.strategy,args.allocation,args.stock_feed,run_preflight=True)
         t.to_csv(out/"trades.csv",index=False)
         e.to_csv(out/"equity.csv",index=False)
         s.to_csv(out/"skipped_signals.csv",index=False)
@@ -170,7 +252,7 @@ def main():
         (out/"report.md").write_text("# EOD backtest failed\n\nNo valid final outcome.\n\n"+str(exc))
         raise SystemExit("EOD quote backtest failed; inspect report artifact") from None
     finally:
-        (out/"quote_provenance.json").write_text(json.dumps(quotes.audit,indent=2))
+        quotes.save_diagnostics(out)
 
 if __name__=="__main__":
     main()

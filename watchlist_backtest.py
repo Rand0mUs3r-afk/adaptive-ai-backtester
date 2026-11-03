@@ -83,7 +83,7 @@ def active_subset(client,frames,roots,pins,start,top):
     return chosen,ranks
 
 
-def simulate(client,quotes,roots,pins,start,end,allocation=.25,mode="manual",top=5,stock_feed="iex"):
+def simulate(client,quotes,roots,pins,start,end,allocation=.25,mode="manual",top=5,stock_feed="iex",run_preflight=False):
     start,end=pd.Timestamp(start),pd.Timestamp(end)
     if start>end or end.date()>=pd.Timestamp.now(tz="America/New_York").date() or (end-start).days>180 or not 0<allocation<=1:
         raise ValueError("Use completed dates up to 180 days and allocation in (0,1]")
@@ -96,6 +96,16 @@ def simulate(client,quotes,roots,pins,start,end,allocation=.25,mode="manual",top
     days=sorted(set(d for root in roots for d in frames[root].date if start<=d<=end))
     if not days:
         raise ValueError("No trading sessions in requested period")
+    if run_preflight:
+        probe_dates = {}
+        for root in roots:
+            f = frames[root]
+            indices = f.index[f.date == days[0]].tolist()
+            if len(indices) != 1 or indices[0] == 0 or pd.isna(f.iloc[indices[0]-1].slow):
+                raise ValueError("Insufficient current/prior stock coverage for " + root)
+            probe_dates[root] = [f.iloc[indices[0]-1].date.date().isoformat(),
+                days[0].date().isoformat(), days[-1].date().isoformat()]
+        quotes.preflight(probe_dates)
     cash,p,trades,curve,audit,skips=2000.0,None,[],[],[],[]
     fee=.65
     for n,day in enumerate(days):
@@ -185,7 +195,7 @@ def main():
     q=eod.Onclick()
     try:
         roots,pins,mode,top,text=read_watchlist()
-        t,e,a,s,m,resolved,ranks=simulate(alpaca.Alpaca(),q,roots,pins,args.start,args.end,args.allocation,mode,top,args.stock_feed)
+        t,e,a,s,m,resolved,ranks=simulate(alpaca.Alpaca(),q,roots,pins,args.start,args.end,args.allocation,mode,top,args.stock_feed,run_preflight=True)
         config={**vars(args),"watchlist_mode":mode,"resolved_tickers":resolved,"activity_ranking":ranks,"watchlist_sha256":hashlib.sha256(text.encode()).hexdigest(),"starting_equity":2000,"shared_portfolio":True,"scoring":"heuristic, not probability","options_source":"onclickmedia EOD raw bid/ask","git_sha":os.getenv("GITHUB_SHA","local")}
         for frame,name in ((t,"trades"),(e,"equity"),(a,"setup_audit"),(s,"skipped_signals")):
             frame.to_csv(out/(name+".csv"),index=False)
@@ -201,7 +211,7 @@ def main():
         (out/"report.md").write_text("# Watchlist backtest failed\n\nNo valid final outcome.\n\n"+str(exc))
         raise SystemExit("Watchlist backtest failed; inspect report artifact") from None
     finally:
-        (out/"quote_provenance.json").write_text(json.dumps(q.audit,indent=2))
+        q.save_diagnostics(out)
 
 if __name__=="__main__":
     main()
