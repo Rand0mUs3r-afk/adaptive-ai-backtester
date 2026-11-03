@@ -48,7 +48,7 @@ def normalize(payload, ticker, day):
 
 class Onclick:
     """Raw-quote access only; diagnostics never include response bodies or secrets."""
-    ENDPOINT = "https://api.onclickmedia.com/"
+    ENDPOINT = "https://api.onclickmedia.com/options/"
 
     def __init__(self):
         self.cache, self.audit, self.requests = {}, [], []
@@ -60,7 +60,7 @@ class Onclick:
         value = (headers.get("Content-Type", "") if headers else "").split(";", 1)[0].strip().lower()
         return value if re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", value) else "unknown"
 
-    def _failure(self, ticker, day, category, status, attempt):
+    def _failure(self, ticker, day, category, status, attempt, provider_error_code=None):
         hints = {
             401: "Provider requires authentication; verify its documented access method.",
             403: "Provider denied access; verify permission and supported API access.",
@@ -68,6 +68,9 @@ class Onclick:
             429: "Provider rate limit reached; retry later within its documented limits.",
         }
         hint = hints.get(status, "Check provider availability and the documented API response format.")
+        if provider_error_code == "outside_plan_data_range":
+            hint = ("Provider reports that the requested date is outside the available plan range. "
+                "Verify historical date entitlement with the provider; do not silently change test dates.")
         return ValueError(f"OnclickMedia {category}: ticker={ticker}, date={day}, "
             f"HTTP={status if status is not None else 'unavailable'}, attempts={attempt}. "
             f"{hint} See options_request_diagnostics.json. No trade-bar or midpoint fallback permitted.")
@@ -110,7 +113,15 @@ class Onclick:
                 record.update(category="http_error", http_status=exc.code,
                     content_type=self._content_type(exc.headers))
                 retryable = exc.code in (408, 429, 500, 502, 503, 504)
-                exc.close()
+                try:
+                    # Whitelist an exact known message; never persist raw response bodies.
+                    provider_error = json.loads(exc.read(4096)).get("error")
+                    if provider_error == "Requested date is outside your plan's data range":
+                        record["provider_error_code"] = "outside_plan_data_range"
+                except (ValueError, TypeError, AttributeError, OSError):
+                    pass
+                finally:
+                    exc.close()
             except (json.JSONDecodeError, UnicodeDecodeError):
                 record["category"] = "invalid_json"
             except (TimeoutError, URLError, OSError) as exc:
@@ -118,7 +129,7 @@ class Onclick:
                 retryable = True
             self.requests.append(record)
             if not retryable or attempt == 3:
-                raise self._failure(ticker, day, record["category"], record["http_status"], attempt) from None
+                raise self._failure(ticker, day, record["category"], record["http_status"], attempt, record.get("provider_error_code")) from None
 
     def preflight(self, dates_by_ticker):
         """Probe prior/entry/final snapshots, without using quotes to rank trades."""

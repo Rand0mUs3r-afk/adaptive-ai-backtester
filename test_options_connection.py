@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse, parse_qs
 
 import pandas as pd
 from onclick_backtest import Onclick, simulate
@@ -27,11 +28,11 @@ def response(payload, content_type="application/json"):
     return stream
 
 
-def http_error(code):
+def http_error(code, body=b'{"error":"DO_NOT_LOG"}'):
     headers = Message()
     headers["Content-Type"] = "application/json"
     return HTTPError("https://example.invalid/?apikey=DO_NOT_LOG", code,
-        "DO_NOT_LOG", headers, BytesIO(b'{"error":"DO_NOT_LOG"}'))
+        "DO_NOT_LOG", headers, BytesIO(body))
 
 
 class Stocks:
@@ -53,6 +54,11 @@ class ConnectionTests(unittest.TestCase):
             first = q.chain("SPY", "2025-01-13")
             self.assertIs(first, q.chain("SPY", "2025-01-13"))
         self.assertEqual(opened.call_count, 1)
+        url = urlparse(opened.call_args.args[0].full_url)
+        self.assertEqual((url.scheme, url.netloc, url.path), ("https", "api.onclickmedia.com", "/options/"))
+        self.assertEqual(parse_qs(url.query), {"ticker": ["SPY"], "date": ["2025-01-13"],
+            "type": ["call"], "data": ["greeks"], "output": ["json-v1"]})
+        self.assertEqual(q.requests[0]["endpoint"], "https://api.onclickmedia.com/options/")
         self.assertEqual(opened.call_args.args[0].get_header("Accept"), "application/json")
         self.assertTrue(opened.call_args.args[0].get_header("User-agent"))
         self.assertEqual((first[0]["bid"], first[0]["ask"]), (2, 2.1))
@@ -70,6 +76,27 @@ class ConnectionTests(unittest.TestCase):
                 self.assertEqual(q.requests[0]["category"], "http_error")
                 self.assertEqual(q.requests[0]["content_type"], "application/json")
                 self.assertEqual(q.audit, [])
+
+    def test_plan_range_error_is_actionable_without_raw_body(self):
+        exc = http_error(403, json.dumps({"error": "Requested date is outside your plan's data range",
+            "token": "DO_NOT_LOG"}).encode())
+        with self.transport(side_effect=exc) as opened:
+            q = Onclick()
+            with self.assertRaisesRegex(ValueError, "outside the available plan range") as caught:
+                q.chain("SPY", "2025-01-13")
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(q.requests[0]["provider_error_code"], "outside_plan_data_range")
+        self.assertNotIn("DO_NOT_LOG", str(caught.exception) + json.dumps(q.requests))
+        self.assertEqual(q.audit, [])
+
+    def test_non_json_http_body_does_not_mask_http_status(self):
+        exc = http_error(403, b"<html>DO_NOT_LOG</html>")
+        with self.transport(side_effect=exc):
+            q = Onclick()
+            with self.assertRaisesRegex(ValueError, "HTTP=403"):
+                q.chain("SPY", "2025-01-13")
+        self.assertNotIn("provider_error_code", q.requests[0])
+        self.assertNotIn("DO_NOT_LOG", json.dumps(q.requests))
 
     def test_transient_http_retries_then_success(self):
         with self.transport(side_effect=[http_error(429), http_error(503), response([SAMPLE])]) as opened:
