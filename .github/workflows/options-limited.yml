@@ -3,19 +3,37 @@ on:
   workflow_dispatch:
     inputs:
       start:
-        description: Historical start YYYY-MM-DD; provider access must cover prior session too
+        description: Historical start YYYY-MM-DD; prior session access required
         required: true
         type: string
       end:
-        description: Completed end YYYY-MM-DD, max 180 calendar days
+        description: Completed end YYYY-MM-DD, at least two sessions, max 180 days
         required: true
         type: string
       allocation:
         description: Premium allocation per independent 2000 USD account
         default: '0.25'
         type: string
+      research_mode:
+        description: Guarded adds entry spread and ask-jump guards; baseline disables those two guards
+        type: choice
+        options:
+          - guarded
+          - baseline
+        default: guarded
+      max_spread_fraction:
+        description: Maximum (ask-bid)/ask at selection and execution, guarded only
+        type: string
+        default: '0.20'
+      max_entry_ask_increase:
+        description: Maximum ask increase over prior snapshot, guarded only
+        type: string
+        default: '0.25'
 permissions:
   contents: read
+concurrency:
+  group: limited-options-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   limited-research:
     runs-on: ubuntu-latest
@@ -27,15 +45,18 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
       - run: python -m unittest -v
-      - name: Run limited-strike research, no orders
+      - name: Guarded limited-data research, no orders
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           START: ${{ inputs.start }}
           END: ${{ inputs.end }}
           ALLOCATION: ${{ inputs.allocation }}
-        run: python limited_diagnostics.py --start "$START" --end "$END" --allocation "$ALLOCATION"
-      - name: Publish limited-research report
+          RESEARCH_MODE: ${{ inputs.research_mode }}
+          MAX_SPREAD_FRACTION: ${{ inputs.max_spread_fraction }}
+          MAX_ENTRY_ASK_INCREASE: ${{ inputs.max_entry_ask_increase }}
+        run: python hardened_research.py --start "$START" --end "$END" --allocation "$ALLOCATION"
+      - name: Publish report
         if: always()
         run: |
           if [ -f results/report.md ]; then
