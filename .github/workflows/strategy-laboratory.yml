@@ -3,9 +3,10 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: Requested = explicit tickers plus existing watchlist; Full also includes S&P 500 and can take hours/days
+        description: 5 = literal first five original candidates; requested = watchlist union; full also includes S&P 500
         type: choice
         options:
+          - '5'
           - requested
           - full
         default: requested
@@ -51,7 +52,12 @@ jobs:
           START: ${{ inputs.start }}
           SPLIT: ${{ inputs.split }}
           END: ${{ inputs.end }}
-        run: python -u filtered_research.py --prepare --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
+        run: |
+          if [ "$SCOPE" = "5" ]; then
+            python -u five_ticker_scope.py --start "$START" --split "$SPLIT" --end "$END"
+          else
+            python -u filtered_research.py --prepare --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
