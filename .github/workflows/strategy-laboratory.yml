@@ -43,7 +43,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m unittest -v
       - id: plan
-        name: Prepare explicitly selected scope and display simulation count
+        name: Prepare filtered strategy policy and explicitly selected ticker scope
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
@@ -51,7 +51,7 @@ jobs:
           START: ${{ inputs.start }}
           SPLIT: ${{ inputs.split }}
           END: ${{ inputs.end }}
-        run: python -u research_progress.py --prepare --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
+        run: python -u filtered_research.py --prepare --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -78,12 +78,12 @@ jobs:
         with:
           name: research-universe-${{ github.run_id }}
           path: .
-      - name: Show live per-symbol and per-simulation progress
+      - name: Run active strategies with per-simulation progress
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           BATCH: ${{ matrix.batch }}
-        run: python -u research_progress.py --batch "$BATCH"
+        run: python -u filtered_research.py --batch "$BATCH"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -110,7 +110,7 @@ jobs:
           pattern: universe-batch-*-${{ github.run_id }}
           path: suite_inputs/
           merge-multiple: true
-      - run: python expanded_universe.py --merge suite_inputs/
+      - run: python -u filtered_research.py --merge suite_inputs/
       - name: Publish report including final equity/trade table
         if: always()
         run: |
