@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: 5 = literal first five original candidates; requested = watchlist union; full also includes S&P 500
+        description: 5 = first five ticker candidates; requested = watchlist union; full includes S&P 500. All use five shortlisted setups at 10%.
         type: choice
         options:
           - '5'
@@ -45,7 +45,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m unittest -v
       - id: plan
-        name: Prepare filtered strategy policy and explicitly selected ticker scope
+        name: Prepare five-setup shortlist and selected ticker scope
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
@@ -53,12 +53,7 @@ jobs:
           START: ${{ inputs.start }}
           SPLIT: ${{ inputs.split }}
           END: ${{ inputs.end }}
-        run: |
-          if [ "$SCOPE" = "5" ]; then
-            python -u five_ticker_scope.py --start "$START" --split "$SPLIT" --end "$END"
-          else
-            python -u research_repairs.py --prepare --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
-          fi
+        run: python -u shortlist_research.py --prepare --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -94,12 +89,12 @@ jobs:
           key: q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-${{ matrix.batch }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-${{ matrix.batch }}-
-      - name: Run active strategies with cache and complete compact diagnostics
+      - name: Run five shortlisted setups at 10% with cache and diagnostics
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           BATCH: ${{ matrix.batch }}
-        run: python -u research_repairs.py --batch "$BATCH"
+        run: python -u shortlist_research.py --batch "$BATCH"
       - uses: actions/cache/save@v4
         if: ${{ always() && steps.quote-cache.outcome == 'success' }}
         continue-on-error: true
@@ -133,8 +128,8 @@ jobs:
           pattern: universe-batch-*-${{ github.run_id }}
           path: suite_inputs/
           merge-multiple: true
-      - run: python -u research_repairs.py --merge suite_inputs/
-      - name: Publish report including diagnostics and final equity/trade table
+      - run: python -u shortlist_research.py --merge suite_inputs/
+      - name: Publish shortlist, diagnostics and final equity/trade table
         if: always()
         run: |
           if [ -f suite_final/report.md ]; then
