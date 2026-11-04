@@ -1,0 +1,81 @@
+name: Shared portfolio - $2,000 total
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: One shared account; 5 = literal first five candidates; requested = original union; full includes S&P 500
+        type: choice
+        options:
+          - '5'
+          - requested
+          - full
+        default: requested
+      start:
+        description: Portfolio start YYYY-MM-DD
+        type: string
+        default: '2026-08-03'
+        required: true
+      split:
+        description: Reference split date only; cash and positions never reset
+        type: string
+        default: '2026-10-01'
+        required: true
+      end:
+        description: Portfolio end; completed dates and at most 180 calendar days
+        type: string
+        default: '2026-10-30'
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: shared-portfolio-research
+  cancel-in-progress: false
+jobs:
+  portfolio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m unittest -v
+      - uses: actions/cache/restore@v4
+        id: quote-cache
+        continue-on-error: true
+        with:
+          path: quote_cache/
+          key: portfolio-q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            portfolio-q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-
+            q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-
+      - name: Run all shortlisted strategies against one $2,000 cash balance
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          SCOPE: ${{ inputs.scope }}
+          START: ${{ inputs.start }}
+          SPLIT: ${{ inputs.split }}
+          END: ${{ inputs.end }}
+        run: python -u portfolio_backtest.py --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
+      - uses: actions/cache/save@v4
+        if: ${{ always() && steps.quote-cache.outcome == 'success' }}
+        continue-on-error: true
+        with:
+          path: quote_cache/
+          key: portfolio-q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Publish single-account report
+        if: always()
+        run: |
+          if [ -f portfolio_results/report.md ]; then
+            cat portfolio_results/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shared-portfolio-${{ github.run_id }}
+          path: portfolio_results/
+          retention-days: 7
+          if-no-files-found: warn
