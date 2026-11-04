@@ -8,12 +8,12 @@ on:
         default: '2026-08-03'
         required: true
       split:
-        description: Validation start YYYY-MM-DD; development ends the day before
+        description: Validation start YYYY-MM-DD
         type: string
         default: '2026-10-01'
         required: true
       end:
-        description: Completed validation end YYYY-MM-DD; total span max 180 days
+        description: Validation end YYYY-MM-DD; total span max 180 days
         type: string
         default: '2026-10-30'
         required: true
@@ -25,8 +25,9 @@ concurrency:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     outputs:
-      roots: ${{ steps.plan.outputs.roots }}
+      batches: ${{ steps.plan.outputs.batches }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,49 +36,50 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m unittest -v
       - id: plan
+        name: Freeze source membership and verify supported options inventory
         env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           START: ${{ inputs.start }}
           SPLIT: ${{ inputs.split }}
           END: ${{ inputs.end }}
-        run: |
-          python - <<'PY'
-          import json, os
-          from strategy_suite import windows
-          from watchlist_backtest import read_watchlist
-          windows(os.environ['START'],os.environ['SPLIT'],os.environ['END'])
-          roots,pins,mode,_,_=read_watchlist()
-          assert mode=='manual' and all(v is None for v in pins.values())
-          with open(os.environ['GITHUB_OUTPUT'],'a') as out:
-              out.write('roots='+json.dumps(roots)+'\n')
-          PY
+        run: python expanded_universe.py --prepare --start "$START" --split "$SPLIT" --end "$END"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: research-universe-${{ github.run_id }}
+          path: universe.json
+          retention-days: 7
+          if-no-files-found: warn
   experiments:
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        symbol: ${{ fromJSON(needs.plan.outputs.roots) }}
+        batch: ${{ fromJSON(needs.plan.outputs.batches) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - name: Run all rules, both allocations and both periods
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-universe-${{ github.run_id }}
+          path: .
+      - name: Run all strategies for this options-verified batch
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-          SYMBOL: ${{ matrix.symbol }}
-          START: ${{ inputs.start }}
-          SPLIT: ${{ inputs.split }}
-          END: ${{ inputs.end }}
-        run: python strategy_suite.py --symbol "$SYMBOL" --start "$START" --split "$SPLIT" --end "$END"
+          BATCH: ${{ matrix.batch }}
+        run: python expanded_universe.py --batch "$BATCH"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: suite-shard-${{ matrix.symbol }}-${{ github.run_id }}
+          name: universe-batch-${{ matrix.batch }}-${{ github.run_id }}
           path: suite_results/
           retention-days: 7
           if-no-files-found: warn
@@ -93,11 +95,15 @@ jobs:
       - run: pip install -r requirements.txt
       - uses: actions/download-artifact@v4
         with:
-          pattern: suite-shard-*-${{ github.run_id }}
+          name: research-universe-${{ github.run_id }}
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: universe-batch-*-${{ github.run_id }}
           path: suite_inputs/
           merge-multiple: true
-      - run: python strategy_suite.py --merge suite_inputs/
-      - name: Publish summary
+      - run: python expanded_universe.py --merge suite_inputs/
+      - name: Publish report including final equity/trade table
         if: always()
         run: |
           if [ -f suite_final/report.md ]; then
