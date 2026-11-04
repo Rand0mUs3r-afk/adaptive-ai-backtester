@@ -2,6 +2,13 @@ name: Batch strategy laboratory - one run
 on:
   workflow_dispatch:
     inputs:
+      scope:
+        description: Requested = explicit tickers plus existing watchlist; Full also includes S&P 500 and can take hours/days
+        type: choice
+        options:
+          - requested
+          - full
+        default: requested
       start:
         description: Development start YYYY-MM-DD
         type: string
@@ -36,14 +43,15 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m unittest -v
       - id: plan
-        name: Freeze source membership and verify supported options inventory
+        name: Prepare explicitly selected scope and display simulation count
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          SCOPE: ${{ inputs.scope }}
           START: ${{ inputs.start }}
           SPLIT: ${{ inputs.split }}
           END: ${{ inputs.end }}
-        run: python expanded_universe.py --prepare --start "$START" --split "$SPLIT" --end "$END"
+        run: python -u research_progress.py --prepare --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -70,12 +78,12 @@ jobs:
         with:
           name: research-universe-${{ github.run_id }}
           path: .
-      - name: Run all strategies for this options-verified batch
+      - name: Show live per-symbol and per-simulation progress
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           BATCH: ${{ matrix.batch }}
-        run: python expanded_universe.py --batch "$BATCH"
+        run: python -u research_progress.py --batch "$BATCH"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
