@@ -1,0 +1,112 @@
+name: Batch strategy laboratory - one run
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: Development start YYYY-MM-DD
+        type: string
+        default: '2026-08-03'
+        required: true
+      split:
+        description: Validation start YYYY-MM-DD; development ends the day before
+        type: string
+        default: '2026-10-01'
+        required: true
+      end:
+        description: Completed validation end YYYY-MM-DD; total span max 180 days
+        type: string
+        default: '2026-10-30'
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: strategy-laboratory
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      roots: ${{ steps.plan.outputs.roots }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest -v
+      - id: plan
+        env:
+          START: ${{ inputs.start }}
+          SPLIT: ${{ inputs.split }}
+          END: ${{ inputs.end }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from strategy_suite import windows
+          from watchlist_backtest import read_watchlist
+          windows(os.environ['START'],os.environ['SPLIT'],os.environ['END'])
+          roots,pins,mode,_,_=read_watchlist()
+          assert mode=='manual' and all(v is None for v in pins.values())
+          with open(os.environ['GITHUB_OUTPUT'],'a') as out:
+              out.write('roots='+json.dumps(roots)+'\n')
+          PY
+  experiments:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        symbol: ${{ fromJSON(needs.plan.outputs.roots) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Run all rules, both allocations and both periods
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          SYMBOL: ${{ matrix.symbol }}
+          START: ${{ inputs.start }}
+          SPLIT: ${{ inputs.split }}
+          END: ${{ inputs.end }}
+        run: python strategy_suite.py --symbol "$SYMBOL" --start "$START" --split "$SPLIT" --end "$END"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: suite-shard-${{ matrix.symbol }}-${{ github.run_id }}
+          path: suite_results/
+          retention-days: 7
+          if-no-files-found: warn
+  combine:
+    needs: [plan, experiments]
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: suite-shard-*-${{ github.run_id }}
+          path: suite_inputs/
+          merge-multiple: true
+      - run: python strategy_suite.py --merge suite_inputs/
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f suite_final/report.md ]; then
+            cat suite_final/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: strategy-lab-final-${{ github.run_id }}
+          path: suite_final/
+          retention-days: 7
+          if-no-files-found: warn
