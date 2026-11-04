@@ -41,6 +41,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
       - run: pip install -r requirements.txt
       - run: python -m unittest -v
       - id: plan
@@ -56,7 +57,7 @@ jobs:
           if [ "$SCOPE" = "5" ]; then
             python -u five_ticker_scope.py --start "$START" --split "$SPLIT" --end "$END"
           else
-            python -u filtered_research.py --prepare --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
+            python -u research_repairs.py --prepare --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
           fi
       - uses: actions/upload-artifact@v4
         if: always()
@@ -79,17 +80,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
       - run: pip install -r requirements.txt
       - uses: actions/download-artifact@v4
         with:
           name: research-universe-${{ github.run_id }}
           path: .
-      - name: Run active strategies with per-simulation progress
+      - uses: actions/cache/restore@v4
+        id: quote-cache
+        continue-on-error: true
+        with:
+          path: quote_cache/
+          key: q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-${{ matrix.batch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-${{ matrix.batch }}-
+      - name: Run active strategies with cache and complete compact diagnostics
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           BATCH: ${{ matrix.batch }}
-        run: python -u filtered_research.py --batch "$BATCH"
+        run: python -u research_repairs.py --batch "$BATCH"
+      - uses: actions/cache/save@v4
+        if: ${{ always() && steps.quote-cache.outcome == 'success' }}
+        continue-on-error: true
+        with:
+          path: quote_cache/
+          key: q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-${{ matrix.batch }}-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -106,6 +122,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
       - run: pip install -r requirements.txt
       - uses: actions/download-artifact@v4
         with:
@@ -116,8 +133,8 @@ jobs:
           pattern: universe-batch-*-${{ github.run_id }}
           path: suite_inputs/
           merge-multiple: true
-      - run: python -u filtered_research.py --merge suite_inputs/
-      - name: Publish report including final equity/trade table
+      - run: python -u research_repairs.py --merge suite_inputs/
+      - name: Publish report including diagnostics and final equity/trade table
         if: always()
         run: |
           if [ -f suite_final/report.md ]; then
