@@ -51,7 +51,7 @@ jobs:
           restore-keys: |
             portfolio-q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-
             q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-
-      - name: Run all shortlisted strategies against one $2,000 cash balance
+      - name: Run shared portfolio with bounded exact-contract verification
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
@@ -59,14 +59,14 @@ jobs:
           START: ${{ inputs.start }}
           SPLIT: ${{ inputs.split }}
           END: ${{ inputs.end }}
-        run: python -u portfolio_backtest.py --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
+        run: python -u portfolio_verified.py --scope "$SCOPE" --start "$START" --split "$SPLIT" --end "$END"
       - uses: actions/cache/save@v4
         if: ${{ always() && steps.quote-cache.outcome == 'success' }}
         continue-on-error: true
         with:
           path: quote_cache/
           key: portfolio-q-v1-${{ hashFiles('limited_backtest.py', 'onclick_backtest.py', 'research_repairs.py') }}-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Publish single-account report
+      - name: Publish single-account report and precise failure details
         if: always()
         run: |
           if [ -f portfolio_results/report.md ]; then
